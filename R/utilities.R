@@ -508,6 +508,39 @@ addition = function(a, b){
   c
 }
 
+#' Calculate UMAP Embeddings for Seurat Object
+#' 
+#' @description
+#' Identify variable features, scale the data, run Principal Component Analysis (PCA), find neighbors, identify clusters,
+#' and compute UMAP (Uniform Manifold Approximation and Projection) embeddings for 
+#' visualization of cell clusters. 
+#'
+#' @noRd
+#' 
+calc_UMAP <- function(input_seurat){
+  assay_name = input_seurat@assays |> names() |> extract2(1)
+  find_var_genes <- FindVariableFeatures(input_seurat)
+  var_genes<- find_var_genes@assays[[assay_name]]@var.features
+  
+  x<- ScaleData(input_seurat) |>
+    # Calculate UMAP of clusters
+    RunPCA(features = var_genes) |>
+    FindNeighbors(dims = 1:30) |>
+    FindClusters(resolution = 0.5) |>
+    RunUMAP(dims = 1:30, spread    = 0.5,min.dist  = 0.01, n.neighbors = 10L) |> 
+    as_tibble()
+  return(x)
+}
+#' Subsetting input dataset into a list of seurat objects by sample/ tissue 
+#'  @description
+#' Function to subset Seurat object by tissue
+get_unique_tissues <- function(seurat_object, sample_column) {
+  sample_column<- quo_name(sample_column)
+  unique_sample <- seurat_object@meta.data |> pull(sample_column) |> unique()
+  
+  return(unique_sample)
+}
+
 #' Check for Strong Evidence
 #'
 #' This function checks for strong evidence in cell annotations.
@@ -521,12 +554,12 @@ addition = function(a, b){
 #'
 #' @return A data frame with a column indicating strong evidence.
 #'
-#' @examples
-#' single_cell_data <- data.frame(
-#'   cell_annotation_azimuth_l2 = c("cd14 mono", "b naive"),
-#'   cell_annotation_blueprint_singler = c("monocytes", "naive b")
-#' )
-#' strong_evidence_data <- is_strong_evidence(single_cell_data, cell_annotation_azimuth_l2, cell_annotation_blueprint_singler)
+# @examples
+# single_cell_data <- data.frame(
+#   cell_annotation_azimuth_l2 = c("cd14 mono", "b naive"),
+#   cell_annotation_blueprint_singler = c("monocytes", "naive b")
+#' 
+# strong_evidence_data <- is_strong_evidence(single_cell_data, cell_annotation_azimuth_l2, cell_annotation_blueprint_singler)
 #'
 is_strong_evidence = function(single_cell_data, cell_annotation_azimuth_l2, cell_annotation_blueprint_singler){
   
@@ -577,10 +610,10 @@ is_strong_evidence = function(single_cell_data, cell_annotation_azimuth_l2, cell
 #'
 #' @return A cleaned and standardized vector of cell types.
 #'
-#' @examples
-#' cell_types <- c("CD4 T Cell, AlphaBeta", "NK cell, gammadelta", "Central Memory")
-#' cleaned_cell_types <- clean_cell_types_deeper(cell_types)
-#'
+# @examples
+# cell_types <- c("CD4 T Cell, AlphaBeta", "NK cell, gammadelta", "Central Memory")
+# cleaned_cell_types <- clean_cell_types_deeper(cell_types)
+
 clean_cell_types_deeper = function(x){
   x |> 
     # Annotate
@@ -645,8 +678,7 @@ clean_cell_types_deeper = function(x){
 #'
 #' @examples
 #' cell_types <- c("CD4+ T-cells", "NK cells", "Blast-cells")
-#' cleaned_cell_types <- clean_cell_types(cell_types)
-#'
+# cleaned_cell_types <- clean_cell_types(cell_types)
 clean_cell_types = function(.x){
   .x |>
     str_remove_all("\\+") |>
@@ -669,7 +701,7 @@ clean_cell_types = function(.x){
 #'
 #' @examples
 #' metadata <- data.frame(cell_type = c("Myofibroblast", "Fibroblast", "Other Fibroblast"))
-#' harmonized_metadata <- harmonise_names_non_immune(metadata)
+# harmonized_metadata <- harmonise_names_non_immune(metadata)
 #'
 harmonise_names_non_immune = function(metadata){
   
@@ -1496,4 +1528,3 @@ get_manually_curated_immune_cell_types = function(){
   
   
 }
-

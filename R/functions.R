@@ -281,6 +281,10 @@ alive_identification <- function(input_read_RNA_assay,
                                  annotation_label_transfer_tbl,
                                  assay = NULL) {
   
+  # Fix CGHECK notes
+  empty_droplet = NULL
+  detected = NULL
+  
   # Get assay
   if(is.null(assay)) assay = input_read_RNA_assay@assays |> names() |> extract2(1)
   
@@ -647,41 +651,6 @@ preprocessing_output <- function(tissue,
 }
 
 
-#' #' Pseudobulk Preprocessing
-#' #'
-#' #' @description
-#' #' Aggregates cells based on sample and cell type annotations, creating pseudobulk samples 
-#' #' for each combination. Handles RNA and ADT assays, ensuring that missing genes are accounted 
-#' #' for and aligns data across multiple samples.
-#' #'
-#' #' @param reference_label_fine Reference label for fine categorization.
-#' #' @param preprocessing_output_S Processed dataset from preprocessing.
-#' #' @param sample_column Column name indicating sample identifiers.
-#' #'
-#' #' @return List containing pseudobulk data aggregated by sample and by both sample and cell type.
-#' #'
-#' #' @import tidySingleCellExperiment
-#' #' @import tidySummarizedExperiment
-#' #' @importFrom dplyr left_join
-#' #' @importFrom dplyr filter
-#' #' @importFrom dplyr mutate
-#' #' @importFrom dplyr rename
-#' #' @importFrom dplyr select
-#' #' @importFrom stringr str_remove
-#' #' @importFrom tidyr unite
-#' #' @importFrom tidyr pivot_longer
-#' #' @importFrom tidyseurat aggregate_cells
-#' #' @importFrom tidybulk as_SummarizedExperiment
-#' #' @importFrom S4Vectors cbind
-#' #' @importFrom purrr map
-#' #' @importFrom scater isOutlier
-#' #' @importFrom SummarizedExperiment rowData
-#' #' @export
-#' #' 
-#' 
-#' #c(!!as.symbol(sample_column), !!as.symbol(reference_label_fine))
-
-
 #' Create pseudobulk
 #'
 #' @description
@@ -796,7 +765,7 @@ pseudobulk_merge <- function(create_pseudobulk_sample, assays, x , ...) {
     do.call(S4Vectors::cbind, .)
   
   # Return the pseudobulk data for this single sample
-  return(create_pseudobulk_sample)
+  return(output_path_sample)
 }
 
 #' Ligand-Receptor Count from Seurat Data
@@ -989,9 +958,9 @@ seurat_to_ligand_receptor_count = function(counts, .cell_group, assay, sample_fo
 #' The results are joined back to each SingleCellExperiment object. If no abundance assay is specified, 
 #' the function defaults to the first assay in each SingleCellExperiment object.
 #'
-#' @examples
-#' # Assuming `se_list` is a list of SingleCellExperiment objects
-#' result <- map_add_dispersion_to_se(se_list, .col = se_objects, abundance = "counts")
+# @examples
+# # Assuming `se_list` is a list of SingleCellExperiment objects
+# result <- map_add_dispersion_to_se(se_list, .col = se_objects, abundance = "counts")
 #'
 #' @importFrom magrittr extract2
 #' @importFrom edgeR estimateDisp
@@ -1181,6 +1150,70 @@ map_split_sce_by_gene = function(sce_df, .col, how_many_chunks_base = 10, max_ce
     mutate(sce_md5 = map_chr(!!.col, digest))
 }
 
+
+#' Calculate UMAP
+#' Scales the input data, performing PCA, clustering the cells and running UMAP and constructs a tibble in preparation for plotting in 
+#' the doublet identification report 
+#' 
+#' @param input_seurat Single Seurat object (Input data)
+#' 
+#' @export
+calc_UMAP <- function(input_seurat){
+  find_var_genes <- FindVariableFeatures(input_seurat)
+  var_genes<- find_var_genes@assays$originalexp@var.features
+  
+  x<- ScaleData(input_seurat) |>
+    # Calculate UMAP of clusters
+    RunPCA(features = var_genes) |>
+    FindNeighbors(dims = 1:30) |>
+    FindClusters(resolution = 0.5) |>
+    RunUMAP(dims = 1:30, spread    = 0.5,min.dist  = 0.01, n.neighbors = 10L) |> 
+    as_tibble()
+  return(x)
+}
+
+#' Get unique tissues 
+#' Obtain unique tissues/ samples from input dataset 
+#' 
+#' @export
+get_unique_tissues <- function(seurat_object) {
+  unique(seurat_object@meta.data$Tissue)
+}
+
+
+#' Find variable genes 
+#' 
+#' @param input_seurat Single Seurat object (Input data)
+#' @param empty_droplet Single dataframe containing empty droplet filtering information 
+#' @return A vector of variable gene names
+#' @export
+# Find set of variable genes 
+find_variable_genes <- function(input_seurat, empty_droplet){
+  
+  # Set the assay of choice
+  assay_of_choice = input_seurat@assays |> names() |> extract2(1)
+  
+  # Ensure "HTO" and "ADT" assays are removed if present
+  if("HTO" %in% names(input_seurat@assays)) input_seurat[["HTO"]] = NULL
+  if("ADT" %in% names(input_seurat@assays)) input_seurat[["ADT"]] = NULL
+  
+  # Filter out empty droplets
+  seu<- dplyr::left_join(input_seurat, empty_droplet) |>
+    dplyr::filter(!empty_droplet)
+  
+  # Update Seurat object meta.data after filtering
+  # input_seurat@meta.data <- seu
+  
+  # Scale data
+  input_seurat <- ScaleData(seu, assay=assay_of_choice, return.only.var.genes=FALSE)
+  
+  # Find and retrieve variable features
+  input_seurat <- FindVariableFeatures(input_seurat, assay=assay_of_choice, nfeatures = 500)
+  my_variable_genes <- VariableFeatures(input_seurat, assay=assay_of_choice)
+  
+  return(my_variable_genes)
+}
+
 #' Harmonize cell type annotations based on consensus
 #'
 #' This function harmonizes cell type annotations by matching them with a reference annotation
@@ -1216,7 +1249,7 @@ annotation_consensus = function(single_cell_data, .sample_column, .cell_type, .a
   #   ) |> 
   #   as_tibble() |> 
   #   mutate(cell_type_clean = cell_type |> clean_cell_types()) |> 
-  #   clean_cell_types_deeper() |> 
+  #   HPCell::clean_cell_types_deeper() |> 
   #   select(-cell_type) |> 
   #   
   #   count(cell_type_harmonised, cell_annotation_azimuth_l2, cell_annotation_blueprint_singler, cell_annotation_monaco_singler, confidence_class, cell_type_clean) |>
@@ -1241,10 +1274,10 @@ annotation_consensus = function(single_cell_data, .sample_column, .cell_type, .a
     
     is_strong_evidence(cell_annotation_azimuth_l2, cell_annotation_blueprint_singler) |> 
     
-    # Clen cell types
+    # Clean cell types
     mutate(cell_type_clean = cell_type |> clean_cell_types()) |> 
     left_join(read_csv("~/PostDoc/CuratedAtlasQueryR/dev/metadata_cell_type.csv"),  by = "cell_type") |> 
-    clean_cell_types_deeper() |>
+    HPCell::clean_cell_types_deeper() |>
     
     # Reference annotation link
     left_join(reference_annotation ) 
@@ -1275,20 +1308,6 @@ annotation_consensus = function(single_cell_data, .sample_column, .cell_type, .a
       by = join_by(.cell, !!.sample_column == .sample)
     )
   
-}
-
-# Doublet identification report tible construction 
-calc_UMAP <- function(input_seurat){
-  find_var_genes <- FindVariableFeatures(input_seurat)
-  var_genes<- find_var_genes@assays$originalexp@var.features
-  
-  ScaleData(input_seurat) |>
-    # Calculate UMAP of clusters
-    RunPCA(features = var_genes) |>
-    FindNeighbors(dims = 1:30) |>
-    FindClusters(resolution = 0.5) |>
-    RunUMAP(dims = 1:30, spread    = 0.5,min.dist  = 0.01, n.neighbors = 10L) |> 
-    as_tibble()
 }
 
 
